@@ -16,7 +16,7 @@ const MODEL = process.env.MODEL || "claude-sonnet-5-5";
 const MOCK = process.env.MOCK === "1";
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const SAVED_FILE = path.join(DATA_DIR, "saved.json");
-const GATEWAY_LIST_URL = "https://api.sprites.dev/v1/gateway/list";
+const GATEWAY_LIST_URL = process.env.GATEWAY_LIST_URL || "https://api.sprites.dev/v1/gateway/list";
 const MAX_TURNS = 8;
 
 // ---------------------------------------------------------------------------
@@ -31,29 +31,21 @@ const connectors = {
   apify: process.env.APIFY_GATEWAY_URL || null,
   box: process.env.BOX_GATEWAY_URL || null,
 };
-let discovered = false;
+let lastDiscovery = 0;
 
+// Looks up this Sprite's connectors from the gateway. If any are missing (for example,
+// access was granted after Jolly started), it tries again, at most every 20 seconds.
 async function discoverConnectors() {
-  if (discovered || MOCK) return;
-  discovered = true;
-  if (Object.values(connectors).every(Boolean)) return;
+  if (MOCK || Object.values(connectors).every(Boolean)) return;
+  if (Date.now() - lastDiscovery < 20_000) return;
+  lastDiscovery = Date.now();
   try {
     const res = await fetch(GATEWAY_LIST_URL);
     if (!res.ok) throw new Error(`gateway list returned ${res.status}`);
     const body = await res.json();
-    // Be forgiving about the shape: find any object with a gateway_base_url.
-    const entries = [];
-    (function walk(v) {
-      if (Array.isArray(v)) v.forEach(walk);
-      else if (v && typeof v === "object") {
-        if (v.gateway_base_url) entries.push(v);
-        Object.values(v).forEach(walk);
-      }
-    })(body);
-    for (const e of entries) {
-      const label = JSON.stringify([e.provider, e.type, e.name, e.slug, e.gateway_base_url]).toLowerCase();
-      for (const key of Object.keys(connectors)) {
-        if (!connectors[key] && label.includes(key)) connectors[key] = e.gateway_base_url;
+    for (const c of body.connections || []) {
+      if (c.provider in connectors && !connectors[c.provider] && c.gateway_base_url) {
+        connectors[c.provider] = c.gateway_base_url;
       }
     }
     console.log("[connectors]", connectors);
@@ -73,15 +65,31 @@ const trimSlash = (s) => s.replace(/\/+$/, "");
 const MAPS_ACTOR = process.env.APIFY_MAPS_ACTOR || "compass~crawler-google-places";
 const SEARCH_ACTOR = process.env.APIFY_SEARCH_ACTOR || "apify~google-search-scraper";
 
-async function runActor(actor, input) {
+// Starts an Actor run, waits for it to finish, then reads its results
+// (the pattern shown in the Apify connector's usage example).
+async function runActor(actor, input, { timeoutMs = 150_000 } = {}) {
   if (!connectors.apify) throw new Error("Apify connector isn't set up yet.");
-  const res = await fetch(`${trimSlash(connectors.apify)}/v2/acts/${actor}/run-sync-get-dataset-items?timeout=120`, {
+  const base = trimSlash(connectors.apify);
+  const api = async (pathname, opts = {}) => {
+    const res = await fetch(base + pathname, opts);
+    if (!res.ok) throw new Error(`Apify ${pathname.split("?")[0]} failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
+    return res.json();
+  };
+
+  const started = await api(`/v2/actors/${actor}/runs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
-  if (!res.ok) throw new Error(`Apify ${actor} failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
-  return res.json();
+  let run = started.data;
+  const deadline = Date.now() + timeoutMs;
+  while (["READY", "RUNNING"].includes(run.status)) {
+    if (Date.now() > deadline) throw new Error(`Apify ${actor} took too long`);
+    await new Promise((r) => setTimeout(r, 3000));
+    run = (await api(`/v2/actor-runs/${run.id}`)).data;
+  }
+  if (run.status !== "SUCCEEDED") throw new Error(`Apify ${actor} ended with status ${run.status}`);
+  return api(`/v2/datasets/${run.defaultDatasetId}/items?clean=true`);
 }
 
 // Google Maps: real places near the person, with address, phone, hours.
@@ -300,21 +308,18 @@ async function runAgent(history, onEvent) {
       return { type: "results", ...finish.input, messages };
     }
 
-    const results = [];
-    for (const t of toolUses) {
+    // Run this turn's tools side by side (two searches take as long as the slower one).
+    const results = await Promise.all(toolUses.map(async (t) => {
       const run = {
         search_places: [() => searchPlaces(t.input), `Looking on the map for ${t.input.query} near ${t.input.location}`],
         search_web: [() => searchWeb(t.input), `Searching: ${t.input.query}`],
         verify_nonprofit: [() => verifyNonprofit(t.input), `Checking records for ${t.input.name}`],
       }[t.name];
-      if (!run) {
-        results.push({ type: "tool_result", tool_use_id: t.id, content: "Unknown tool", is_error: true });
-        continue;
-      }
+      if (!run) return { type: "tool_result", tool_use_id: t.id, content: "Unknown tool", is_error: true };
       onEvent?.(run[1]);
       const out = await run[0]();
-      results.push({ type: "tool_result", tool_use_id: t.id, content: JSON.stringify(out) });
-    }
+      return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify(out) };
+    }));
     messages.push({ role: "user", content: results });
   }
   return { type: "message", text: "I got a little lost in my lists there. Could you try asking again?", messages };
@@ -340,11 +345,11 @@ async function storeSaved(list) {
 // Box: keep a copy of the giving list in Box, updated in place each time
 // ---------------------------------------------------------------------------
 // The connector forwards Box API calls (read, create folders, upload files and new versions).
-// Box uploads normally go to upload.box.com/api/2.0/...; if your connector's API Usage example
-// shows a different path, set BOX_UPLOAD_PATH (default "/2.0").
+// Uploads go to <gateway>/upload/files/content (new file) or /upload/files/<id>/content (new version),
+// as the Box connector's usage example shows. Override with BOX_UPLOAD_PATH if that changes.
 
 const BOX_FOLDER_ID = process.env.BOX_FOLDER_ID || "0"; // "0" = Box root folder
-const BOX_UPLOAD_PATH = process.env.BOX_UPLOAD_PATH || "/2.0";
+const BOX_UPLOAD_PATH = process.env.BOX_UPLOAD_PATH || "/upload";
 const BOX_STATE_FILE = path.join(DATA_DIR, "box.json");
 
 function givingListMarkdown(list) {

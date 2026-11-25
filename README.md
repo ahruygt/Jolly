@@ -67,7 +67,7 @@ Optional settings:
 |---|---|---|
 | `MODEL` | `claude-sonnet-5-5` | Claude model |
 | `BOX_FOLDER_ID` | `0` (root) | Box folder for the giving list |
-| `BOX_UPLOAD_PATH` | `/2.0` | Path prefix for Box uploads, if the Box connector's "API Usage" example differs |
+| `BOX_UPLOAD_PATH` | `/upload` | Path prefix for Box uploads, if the Box connector's "API Usage" example changes |
 | `APIFY_MAPS_ACTOR` | `compass~crawler-google-places` | Google Maps Actor |
 | `APIFY_SEARCH_ACTOR` | `apify~google-search-scraper` | Google Search Actor |
 
