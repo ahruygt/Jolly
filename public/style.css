@@ -71,7 +71,10 @@ input[type="text"] { font: inherit; padding: 12px 14px; border-radius: 0; border
 .bubble.greeting { font-size: 1.2rem; }
 .bubble.user { background: var(--accent-soft); color: var(--bubble-ink); justify-self: end; }
 .bubble.status { color: var(--muted); font-style: italic; }
-.status-note { font-style: normal; font-size: .9rem; opacity: .85; }
+/* "This may take a minute." matches the status text and gently pulses */
+.status-note { animation: soft-blink 2.6s ease-in-out infinite; }
+@keyframes soft-blink { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .status-note { animation: none; } }
 /* Small "Yes" link right after Jolly's follow-up question */
 .yes-link { font: inherit; font-weight: 700; color: var(--accent-text); background: none; border: 0; padding: 0 2px; margin-left: 2px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 .yes-link:hover { color: var(--accent); }
