@@ -2,7 +2,7 @@
 
 Jolly is a cheerful agent that helps you find a local way to give: food banks, toy drives, meal delivery, family support, cash donations, or volunteer shifts. Tell it your city or ZIP and what you'd like to do. Jolly finds real places on the map and searches for drives and sign-up pages. It also checks organizations against IRS nonprofit records and gives you a short list of cards. Save the ones you like, then send your giving list to Box so it's ready at tax time.
 
-It works all year, and it switches to a holiday look from mid-November to early January. The ❄ button toggles the look by hand.
+It works all year. The snowflake in the corner switches to a winter look with falling snow.
 
 Built for **Hacksgiving 2026**.
 
@@ -25,49 +25,51 @@ Browser ──► server.js on the Sprite (:8080)
 
 ## Run it on a Sprite
 
-1. **Create a Sprite**
+1. **Add the connectors** in the Fly.io dashboard: your org → Sprites → Connectors → Add connector.
+   * **Anthropic:** an API key from console.anthropic.com (Settings → API keys).
+   * **Apify:** a token from console.apify.com (Settings → API & Integrations). Actor runs use Apify credits.
+   * **Box:** choose "Continue with Box" and approve file access.
+
+   For each one, turn off "Allow all sprites" and allow names starting with `jolly`.
+
+2. **Create the Sprite** (on your computer):
    ```bash
    curl https://sprites.dev/install.sh | bash
    sprite login
-   sprite create jolly
-   sprite console -s jolly
+   sprite create -o <your-org> jolly
+   sprite console -o <your-org> -s jolly
    ```
 
-2. **Add the connectors.** In the Fly.io dashboard, go to your org, then Sprites → Connectors → Add connector:
-   * **Anthropic:** paste your Anthropic API key.
-   * **Apify:** paste an Apify API token. Actor runs use Apify credits, and the free plan's monthly credit covers a demo.
-   * **Box:** choose "Continue with Box" and approve file access.
-
-   Grant each connector access to this Sprite. Connectors deny every Sprite until you do. Restrict access by name prefix, e.g. `jolly`.
-
-3. **Get the code onto the Sprite.** Inside the console:
+3. **Inside the Sprite** (the prompt reads `sprite@jolly`), get the code and check the connectors:
    ```bash
-   git clone <your repo url> jolly && cd jolly
+   git clone https://github.com/ahruygt/jolly.git && cd jolly
+   node server.js &
+   sleep 2 && curl -s localhost:8080/api/health   # anthropic, apify and box should all say true
+   kill %1
    ```
 
-4. **Point the app at the connectors.** The app tries to find them on its own through `https://api.sprites.dev/v1/gateway/list`. To set them by hand, copy each connector's gateway URL from its page in the dashboard:
+4. **Keep it running** as a Sprite service, which restarts whenever the Sprite wakes:
    ```bash
-   export ANTHROPIC_GATEWAY_URL="https://api.sprites.dev/v1/gateway/anthropic/<connection_id>"
-   export APIFY_GATEWAY_URL="https://api.sprites.dev/v1/gateway/apify/<connection_id>"
-   export BOX_GATEWAY_URL="https://api.sprites.dev/v1/gateway/box/<connection_id>"
+   sprite-env services create jolly --cmd node --args "$PWD/server.js"
    ```
-   Optional settings:
-   | Variable | Default | What it does |
-   |---|---|---|
-   | `MODEL` | `claude-sonnet-5-5` | Claude model |
-   | `BOX_FOLDER_ID` | `0` (root) | Box folder for the giving list |
-   | `BOX_UPLOAD_PATH` | `/2.0` | Path prefix for Box uploads. Change it if the Box connector's "API Usage" example uses a different one. |
-   | `APIFY_MAPS_ACTOR` | `compass~crawler-google-places` | Google Maps Actor |
-   | `APIFY_SEARCH_ACTOR` | `apify~google-search-scraper` | Google Search Actor |
 
-5. **Start it**
+5. **Make it public** (back on your computer) and find the URL:
    ```bash
-   node server.js
-   curl localhost:8080/api/health   # anthropic, apify and box should all say true
+   sprite config update -o <your-org> -s jolly --url-auth public
+   sprite info -o <your-org> -s jolly
    ```
-   For a server that keeps running after you close the console, register it as a Sprite service; see `sprite-env --help` in the Sprite. The Sprite sleeps when it's idle, and a visit to its URL wakes it.
 
-6. **Open it.** Each Sprite has its own HTTPS URL that routes to port 8080. Make the URL public so judges can try it.
+If the health check shows `false` for a connector, set its gateway URL by hand (copy it from the connector's page in the dashboard) as `ANTHROPIC_GATEWAY_URL`, `APIFY_GATEWAY_URL` or `BOX_GATEWAY_URL`.
+
+Optional settings:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `MODEL` | `claude-sonnet-5-5` | Claude model |
+| `BOX_FOLDER_ID` | `0` (root) | Box folder for the giving list |
+| `BOX_UPLOAD_PATH` | `/2.0` | Path prefix for Box uploads, if the Box connector's "API Usage" example differs |
+| `APIFY_MAPS_ACTOR` | `compass~crawler-google-places` | Google Maps Actor |
+| `APIFY_SEARCH_ACTOR` | `apify~google-search-scraper` | Google Search Actor |
 
 ## Try it without connectors
 
@@ -78,8 +80,8 @@ Mock mode returns sample results, and "Save list to Box" writes the file to `dat
 
 ## Customizing
 
-* **Mascot:** put an image at `public/art/jolly.png` and replace the placeholder in `public/index.html`.
-* **Holiday look:** every holiday style is under `[data-season="holiday"]` in `public/style.css`.
+* **Art:** the logo and the two background drawings are in `public/art/`.
+* **Winter look:** the snowflake button switches between teal-and-pink and blues-and-crimson with falling snow. Winter colors are under `[data-season="holiday"]` in `public/style.css`.
 * **Personality:** edit `systemPrompt()` in `server.js`.
 
 ## Notes
