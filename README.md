@@ -66,6 +66,7 @@ Optional settings:
 | Variable | Default | What it does |
 |---|---|---|
 | `MODEL` | `claude-sonnet-5-5` | Claude model |
+| `CACHE_HOURS` | `24` | How long repeat searches are answered from the cache |
 | `BOX_FOLDER_ID` | `0` (root) | Box folder for the giving list |
 | `BOX_UPLOAD_PATH` | `/upload` | Path prefix for Box uploads, if the Box connector's "API Usage" example changes |
 | `APIFY_MAPS_ACTOR` | `compass~crawler-google-places` | Google Maps Actor |
@@ -86,6 +87,7 @@ Mock mode returns sample results, and "Save list to Box" writes the file to `dat
 
 ## Notes
 
-* A map search takes 20 to 60 seconds while the Actor runs. The chat shows what Jolly is doing in the meantime.
+* A fresh search takes roughly 15 to 40 seconds while the Apify Actor runs; Jolly asks for a slimmed-down result (no photos, reviews or detail pages) to keep it quick. Repeat searches within a day come back instantly from a cache on the Sprite's disk (`data/cache.json`).
+* Places are checked against IRS records in code, in parallel, so the agent doesn't need an extra step for it.
 * Jolly only recommends organizations it found in search results. A card is marked "Registered nonprofit" only when the ProPublica lookup matches it.
 * Church pantries, school drives, and mutual aid groups often aren't in IRS records. They can still show up, just without the badge.

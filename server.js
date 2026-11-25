@@ -60,6 +60,32 @@ const trimSlash = (s) => s.replace(/\/+$/, "");
 // Tools the agent can use
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Cache: repeat searches within a day come back instantly (kept on the Sprite's disk)
+// ---------------------------------------------------------------------------
+const CACHE_FILE = path.join(DATA_DIR, "cache.json");
+const CACHE_TTL_MS = Number(process.env.CACHE_HOURS || 24) * 3600_000;
+let cachePromise = null;
+
+// Load once and share, so searches running at the same time use the same cache.
+function cacheLoad() {
+  cachePromise ??= readFile(CACHE_FILE, "utf8").then(JSON.parse).catch(() => ({}));
+  return cachePromise;
+}
+async function cached(kind, input, fn) {
+  const key = kind + ":" + JSON.stringify(input).toLowerCase().replace(/\s+/g, " ");
+  const c = await cacheLoad();
+  const hit = c[key];
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
+  const value = await fn();
+  if (!value?.error) {
+    c[key] = { at: Date.now(), value };
+    for (const [k, v] of Object.entries(c)) if (Date.now() - v.at > CACHE_TTL_MS) delete c[k];
+    try { await mkdir(DATA_DIR, { recursive: true }); await writeFile(CACHE_FILE, JSON.stringify(c)); } catch {}
+  }
+  return value;
+}
+
 // Apify Actors, run through the Apify connector. Each call runs an Actor and waits for its dataset.
 // Note: Actor runs use Apify credits. Both Actors below are Apify's public, widely used scrapers.
 const MAPS_ACTOR = process.env.APIFY_MAPS_ACTOR || "compass~crawler-google-places";
@@ -85,7 +111,7 @@ async function runActor(actor, input, { timeoutMs = 150_000 } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (["READY", "RUNNING"].includes(run.status)) {
     if (Date.now() > deadline) throw new Error(`Apify ${actor} took too long`);
-    await new Promise((r) => setTimeout(r, 3000));
+    await new Promise((r) => setTimeout(r, 1500));
     run = (await api(`/v2/actor-runs/${run.id}`)).data;
   }
   if (run.status !== "SUCCEEDED") throw new Error(`Apify ${actor} ended with status ${run.status}`);
@@ -93,18 +119,25 @@ async function runActor(actor, input, { timeoutMs = 150_000 } = {}) {
 }
 
 // Google Maps: real places near the person, with address, phone, hours.
-async function searchPlaces({ query, location, max_results = 8 }) {
+async function searchPlaces({ query, location, max_results = 6 }) {
   if (MOCK) return mockPlaces(query);
-  try {
-    const items = await runActor(MAPS_ACTOR, {
-      searchStringsArray: [query],
-      locationQuery: location,
-      maxCrawledPlacesPerSearch: Math.min(max_results, 12),
-      language: "en",
-      skipClosedPlaces: true,
-    });
-    return {
-      places: items.map((p) => ({
+  const limit = Math.min(max_results, 8);
+  return cached("places", { query, location, limit }, async () => {
+    try {
+      // Slimmed down for speed: no photos, no reviews, no detail pages. The list view
+      // already has the name, address, phone, website and rating Jolly needs.
+      const basic = { searchStringsArray: [query], locationQuery: location, maxCrawledPlacesPerSearch: limit, language: "en" };
+      const slim = { ...basic, skipClosedPlaces: true, scrapePlaceDetailPage: false, scrapeContacts: false, maxImages: 0, maxReviews: 0, maxQuestions: 0 };
+      let items;
+      try {
+        items = await runActor(MAPS_ACTOR, slim);
+      } catch (err) {
+        // If the Actor ever rejects the speed settings, fall back to the basic input.
+        if (!/\(400\)/.test(err.message)) throw err;
+        console.warn("[apify] slim input rejected, retrying with basic input:", err.message);
+        items = await runActor(MAPS_ACTOR, basic);
+      }
+      const places = items.map((p) => ({
         name: p.title,
         category: p.categoryName,
         address: p.address,
@@ -112,18 +145,23 @@ async function searchPlaces({ query, location, max_results = 8 }) {
         website: p.website,
         maps_url: p.url,
         rating: p.totalScore,
-        reviews: p.reviewsCount,
         state: p.state,
-      })),
-    };
-  } catch (err) {
-    return { error: err.message };
-  }
+      }));
+      // Check IRS nonprofit records for every place at once, so Claude doesn't need an extra step.
+      await Promise.all(places.map(async (pl) => { pl.nonprofit = await matchNonprofit(pl.name, pl.state); }));
+      return { places };
+    } catch (err) {
+      return { error: err.message };
+    }
+  });
 }
 
 // Google Search: for drives, events and volunteer sign-ups that aren't places on a map.
 async function searchWeb({ query, max_results = 8 }) {
   if (MOCK) return mockSearch(query);
+  return cached("web", { query, max_results }, () => searchWebUncached({ query, max_results }));
+}
+async function searchWebUncached({ query, max_results }) {
   try {
     const items = await runActor(SEARCH_ACTOR, {
       queries: query,
@@ -144,13 +182,15 @@ async function searchWeb({ query, max_results = 8 }) {
 }
 
 // ProPublica Nonprofit Explorer: free, public IRS data. Confirms an org is a registered nonprofit.
+const PROPUBLICA_API = process.env.PROPUBLICA_API || "https://projects.propublica.org/nonprofits/api/v2";
 async function verifyNonprofit({ name, state }) {
   if (MOCK) return mockVerify(name);
   const params = new URLSearchParams({ q: name });
   if (state) params.set("state[id]", state.toUpperCase().slice(0, 2));
   try {
-    const res = await fetch(`https://projects.propublica.org/nonprofits/api/v2/search.json?${params}`);
-    if (!res.ok) return { found: false, note: `lookup returned ${res.status}` };
+    const res = await fetch(`${PROPUBLICA_API}/search.json?${params}`);
+    if (res.status === 404) return { found: false, matches: [] }; // ProPublica answers 404 when nothing matches
+    if (!res.ok) return { found: false, error: `lookup returned ${res.status}` };
     const data = await res.json();
     const orgs = (data.organizations || []).slice(0, 3).map((o) => ({
       name: o.name,
@@ -162,15 +202,33 @@ async function verifyNonprofit({ name, state }) {
     }));
     return { found: orgs.length > 0, matches: orgs };
   } catch (err) {
-    return { found: false, note: err.message };
+    return { found: false, error: err.message };
   }
+}
+
+const STATE_CODES = { alabama:"AL",alaska:"AK",arizona:"AZ",arkansas:"AR",california:"CA",colorado:"CO",connecticut:"CT",delaware:"DE",florida:"FL",georgia:"GA",hawaii:"HI",idaho:"ID",illinois:"IL",indiana:"IN",iowa:"IA",kansas:"KS",kentucky:"KY",louisiana:"LA",maine:"ME",maryland:"MD",massachusetts:"MA",michigan:"MI",minnesota:"MN",mississippi:"MS",missouri:"MO",montana:"MT",nebraska:"NE",nevada:"NV","new hampshire":"NH","new jersey":"NJ","new mexico":"NM","new york":"NY","north carolina":"NC","north dakota":"ND",ohio:"OH",oklahoma:"OK",oregon:"OR",pennsylvania:"PA","rhode island":"RI","south carolina":"SC","south dakota":"SD",tennessee:"TN",texas:"TX",utah:"UT",vermont:"VT",virginia:"VA",washington:"WA","west virginia":"WV",wisconsin:"WI",wyoming:"WY","district of columbia":"DC" };
+const words = (s) => new Set(String(s).toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 2 && !["the","inc","and","of","for"].includes(w)));
+
+// Finds a place in IRS records and only accepts a close name match, so a pantry
+// doesn't get someone else's EIN.
+async function matchNonprofit(name, state) {
+  if (!name) return null;
+  const code = state ? (STATE_CODES[state.toLowerCase()] || state.slice(0, 2)) : undefined;
+  const out = await cached("irs", { name, code }, () => verifyNonprofit({ name, state: code }));
+  const want = words(name);
+  for (const m of out.matches || []) {
+    const got = words(m.name);
+    const overlap = [...want].filter((w) => got.has(w)).length / Math.max(want.size, 1);
+    if (overlap >= 0.6) return { ein: m.ein, is_501c3: m.subsection === 3, profile: m.profile };
+  }
+  return null;
 }
 
 const TOOLS = [
   {
     name: "search_places",
     description:
-      "Find real places on Google Maps near a location: food banks, food pantries, meal programs, shelters, family resource centers, thrift stores run by charities. Returns name, address, phone, website and rating. Takes 20 to 60 seconds, so make each search count.",
+      "Find real places on Google Maps near a location: food banks, food pantries, meal programs, shelters, family resource centers, thrift stores run by charities. Returns name, address, phone, website, rating, and a nonprofit field (EIN and 501(c)(3) status) when the place matched IRS records. Takes 15 to 40 seconds, so make each search count.",
     input_schema: {
       type: "object",
       properties: {
@@ -255,9 +313,9 @@ Today is ${today}. Mention seasonal programs (holiday toy drives, Thanksgiving m
 
 How you work:
 1. If you don't know where the person is, ask for their city or ZIP in one friendly sentence and stop. Don't call tools yet.
-2. Otherwise search for real, local organizations that match what they want. Use search_places for anything with a front door (food banks, pantries, meal programs, shelters). Use search_web for drives, events and sign-up pages (toy drives, holiday meals, coat drives). Searches are slow and cost credits, so run 1 to 3 focused ones, not more.
-3. Verify the most promising ones with verify_nonprofit. Some good groups (church pantries, mutual aid, school drives) won't be in IRS records; you can still include them with verified=false.
-4. Finish by calling show_results once. Keep the message short and upbeat, never preachy. Don't pressure anyone to give.
+2. Otherwise search for real, local organizations that match what they want, calling all your searches together in a single turn. Use search_places for anything with a front door (food banks, pantries, meal programs, shelters). Use search_web for drives, events and sign-up pages (toy drives, holiday meals, coat drives). Searches are slow and cost credits: 1 or 2 focused searches, never more.
+3. Places from search_places already include a nonprofit field from IRS records: when it's present, set verified=true and use its EIN. Don't call verify_nonprofit for those. Use verify_nonprofit only for a web result you're unsure about, and skip it when it would add a whole extra turn. Some good groups (church pantries, mutual aid, school drives) won't be in IRS records; include them with verified=false.
+4. Right after your searches come back, call show_results once. Keep the message short and upbeat, never preachy. Don't pressure anyone to give.
 
 Rules: only recommend organizations you actually found; never make up a URL, phone number, or EIN. Prefer groups close to the person. Don't give tax advice beyond saying 501(c)(3) gifts are usually deductible.`;
 }
