@@ -92,7 +92,15 @@ async function ask(text) {
   history.push({ role: "user", content });
   busy = true;
   form.classList.add("busy");
-  const status = bubble("agent status", "Rolling up my sleeves…");
+  const status = bubble("agent status", "");
+  const setStatus = (text) => {
+    status.textContent = text + "… ";
+    const note = document.createElement("span");
+    note.className = "status-note";
+    note.textContent = "This may take a minute.";
+    status.appendChild(note);
+  };
+  setStatus("Rolling up my sleeves");
 
   try {
     const res = await fetch("/api/chat", {
@@ -114,7 +122,7 @@ async function ask(text) {
         buf = buf.slice(nl + 1);
         if (!line) continue;
         const evt = JSON.parse(line);
-        if (evt.type === "status") status.textContent = evt.status + "…";
+        if (evt.type === "status") setStatus(evt.status);
         else final = evt;
       }
     }
@@ -149,7 +157,15 @@ function handleFinal(evt) {
     grid.className = "cards";
     (evt.results || []).forEach((r) => grid.appendChild(card(r)));
     chatEl.appendChild(grid);
-    if (evt.follow_up) bubble("agent", evt.follow_up);
+    if (evt.follow_up) {
+      const q = bubble("agent follow-up", evt.follow_up + " ");
+      const yes = document.createElement("button");
+      yes.type = "button";
+      yes.className = "yes-link";
+      yes.textContent = "Yes";
+      yes.addEventListener("click", () => { yes.disabled = true; ask("Yes, please."); });
+      q.appendChild(yes);
+    }
     const back = document.createElement("button");
     back.type = "button";
     back.className = "back-btn";
