@@ -1,0 +1,13 @@
+{
+  "name": "giving-agent",
+  "version": "0.1.0",
+  "description": "Jolly: a friendly agent on a Fly.io Sprite that finds local charities to give to or volunteer with.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "mock": "MOCK=1 node server.js"
+  },
+  "engines": { "node": ">=18" },
+  "license": "MIT"
+}

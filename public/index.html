@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Jolly · Find a local way to give</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@500;600;700;800&family=Newsreader:ital,opsz,wght@1,6..72,400;1,6..72,500&display=swap" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<!-- data-season: "everyday" (teal and pink) or "holiday" (blues and crimson, with snow).
+     The snowflake button switches between them. Winter styles live under [data-season="holiday"] in style.css. -->
+<body data-season="everyday">
+  <div class="overlay" aria-hidden="true"></div>
+  <!-- Background watermarks -->
+  <div class="watermarks" aria-hidden="true">
+    <img class="watermark wm-top-left" src="/art/jolly-star.png" alt="" />
+    <img class="watermark wm-bottom-right" src="/art/jolly-flower.png" alt="" />
+  </div>
+
+  <header class="top">
+    <div>
+      <h1><img class="logo" src="/art/logo.png" alt="Jolly" width="720" height="284" /></h1>
+      <p class="tagline">Find local ways to give <em>every</em> season.</p>
+    </div>
+    <button class="season-toggle" type="button" title="Switch to the winter look" aria-label="Switch to the winter look" aria-pressed="false">&#x2744;&#xFE0E;</button>
+  </header>
+
+  <main>
+    <figure class="quote" id="quote">
+      <p class="q-latin" lang="la"></p>
+      <blockquote class="q-text"></blockquote>
+      <figcaption>
+        <span class="q-who"></span>
+        <button type="button" class="q-shuffle" title="Another quote" aria-label="Show another quote">↻</button>
+      </figcaption>
+    </figure>
+
+    <section class="setup">
+      <label class="where">
+        <span>Where are you?</span>
+        <input id="location" type="text" placeholder="City or ZIP, e.g. Portland, OR" autocomplete="postal-code" />
+      </label>
+
+      <fieldset class="chips">
+        <legend>I'd like to…</legend>
+        <button type="button" data-ask="Find a food bank near me I can donate to or volunteer at.">Help a food bank</button>
+        <button type="button" data-ask="Find a toy drive near me for kids and families.">Give to a toy drive</button>
+        <button type="button" data-ask="Find meal delivery programs near me, like Meals on Wheels, that need volunteers or donations.">Deliver meals</button>
+        <button type="button" data-ask="Find local charities near me where a cash donation goes a long way for families.">Donate money</button>
+        <button type="button" data-ask="Find volunteer opportunities near me this month that families can do together.">Volunteer as a family</button>
+      </fieldset>
+    </section>
+
+    <section class="conversation">
+      <div id="chat" class="chat" aria-live="polite"></div>
+
+    <form id="composer" class="composer">
+      <input id="input" type="text" placeholder="Or tell Jolly what you have in mind…" autocomplete="off" />
+      <button type="submit">Ask</button>
+    </form>
+    </section>
+
+    <section class="saved">
+      <div class="saved-head">
+        <h2>My giving list</h2>
+        <button id="box-save" type="button" title="Save a copy of this list to your Box account">Save list to Box</button>
+      </div>
+      <p id="box-status" class="box-status" aria-live="polite"></p>
+      <ul id="saved-list"><li class="empty">Nothing saved yet. Tap ♡ on any card.</li></ul>
+    </section>
+  </main>
+
+  <footer>
+    Places and search by <a href="https://apify.com" target="_blank" rel="noopener">Apify</a>. Lists saved to <a href="https://box.com" target="_blank" rel="noopener">Box</a>.
+    Nonprofit checks use <a href="https://projects.propublica.org/nonprofits/" target="_blank" rel="noopener">ProPublica Nonprofit Explorer</a>.
+    Running on a <a href="https://fly.io/sprites" target="_blank" rel="noopener">Fly.io Sprite</a>.
+  </footer>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
